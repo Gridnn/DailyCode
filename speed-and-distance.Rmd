@@ -1,0 +1,314 @@
+---
+title: "STAT0030 Assessment 2"
+output: html_document
+---
+Student ID: 20053948
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r,echo=FALSE, warning=FALSE, include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(randomForest)
+```
+# 1. Data Importing
+```{r, echo=FALSE}
+grocery <- read.csv("grocery.csv", header = TRUE)
+cat("Dataset grocery contains", nrow(grocery), "observations of", ncol(grocery), "variables.\n")
+sapply(grocery, class)
+```
+The qualitative variables `STORE_NUM`, `UPC`, `DISPLAY`, `FEATURE` and `TPR_ONLY` should be converted into factor.
+```{r, echo=FALSE}
+grocery$STORE_NUM <- as.factor(grocery$STORE_NUM)
+grocery$UPC <- as.factor(grocery$UPC)
+grocery$DISPLAY <- as.factor(grocery$DISPLAY)
+grocery$FEATURE <- as.factor(grocery$FEATURE)
+grocery$TPR_ONLY <- as.factor(grocery$TPR_ONLY)
+sapply(grocery, class)
+```
+# 2. Statistc Summarizng and Visualizing
+Perform the correlation table among continuous vairbles.  
+```{r,echo=FALSE}
+continuous <-select_if(grocery, is.numeric)
+cor(continuous)
+```
+The response variable `UNITS` have a significant correlation with `PRICE`, but a lower correlation with `BASE_PRICE` and `WEEK_END_DATE`(less than 0.1). Besides, the correlation between `BASE_PRICE` and `PRICE` is large than 0.8.  
+  
+```{r, echo=FALSE, fig1, fig.height = 6.5, fig.width = 12}
+p1 <- ggplot(grocery, aes(x = WEEK_END_DATE, y = UNITS)) +
+  geom_point(size = 1, stroke = 0, shape = 16, fill = "blue", color ="#f68060")+
+  geom_smooth(color='black',se=FALSE,method = "gam",formula = y ~ s(x, bs = "cs"))+
+  ggtitle("1.Scatter plot for UNITS against Week ending date")+
+  xlab("Week ending date")+
+  theme(axis.text=element_text(size=9), 
+        axis.title = element_text(size=9),
+        plot.title = element_text(size=12))
+
+p2 <- ggplot(grocery, aes(x = FEATURE, y = UNITS, fill = DISPLAY)) + 
+   geom_boxplot()+
+   ggtitle("2.Box plot for UNITS against FEATURE and DISPLAY")+
+   theme(axis.text=element_text(size=9), 
+        axis.title = element_text(size=9),
+        plot.title = element_text(size=12),
+        legend.title = element_text(size = 9),
+        legend.text = element_text(size = 9))
+
+p3 <- ggplot(grocery, aes(x = PRICE, y = UNITS))+
+  geom_point(size = 1, stroke = 0, shape = 16,aes(color=MANUFACTURER))+
+  guides(colour = guide_legend(override.aes = list(size=2)))+
+  geom_smooth(color='black',se=FALSE,method = "gam",formula = y ~ s(x, bs = "cs"))+
+  ggtitle("3.Scatter plot for UNITS against PRICE")+
+  theme(axis.text=element_text(size=9), 
+        axis.title = element_text(size=9),
+        plot.title = element_text(size=12),
+        legend.position = "none")
+
+p4 <- ggplot(grocery, aes(x = UPC, y = UNITS, fill = MANUFACTURER)) + 
+   geom_bar(stat = "identity")+
+   coord_flip()+
+   ggtitle("4.Bar plot for UNITS against UPC")+
+   theme(axis.text=element_text(size=9), 
+        axis.title = element_text(size=9),
+        plot.title = element_text(size=12),
+        legend.title = element_text(size = 9),
+        legend.text = element_text(size = 9))
+
+grid.arrange(p1, p2, p3, p4,ncol=2)
+```  
+
+For continuous variables, Plot1 shows that there does not seem to be a obviously trend between `UNITS` and `WEEK_END_DATE`. The Plot3 suggests there are two decreasing `UNIITS` trends in two range of price. The reason is that products from `TOMBSTONE` and `PRIVATE LABEL` has significant higher `UNITS`(Plot 4) which dominates this scatter plot, and each kind of product has different `PRICE` range but both satisfies the trend of higher prices and lower `UNITS`.  
+Moreover, For categorical variables, the Plot2 shows that, generally, products was in in-store leaflet or a part of in-store promotional display both have a higher `UNITS`, and the relationship between the `UPC` and `MANUFACTURER`(719210033x from TOMBSTONE, 721180639xx from TONYS, 206620053x from KING and 111108739x from KING) is clearly displayed in Plot4.  
+  
+
+# 3. Linear Regression Model  
+## Data processing  
+- Remove BASE_PRICE:  
+As the `BASE_PRICE` and `PRICE` have a high correlation, the `BASE_PRICE` who has the lower correlation with `UNITS` compared to `PRICE` should be dropped to avoid **collinearity**.  
+- Remove MANUFACTURER:  
+Since the `UPC` contains all the information of `MANUFACTURER`.  
+- Reduce the level of STORE_NUM  
+The level of the categorical variable `STORE_NUM` is 77 which is too high to interpret, so it will be summarized into 3 levels based on the `UNITS` of `STORE_NUM`, namely `HIGH`, `MED` and `LOW`.   
+To be precise, first, calculate the mean `UNITS` of each level of `STORE_NUM` and output its summary table.  
+```{r,echo=FALSE}
+STORE_Mean <-with(grocery, tapply(UNITS, STORE_NUM, mean))
+summary(STORE_Mean)
+```
+
+Secondly, the `STORE_NUM` with `UNITS` less than or equal to 1st Qu.(9.135) will be classied into the LOW, large than Median(11.477) and less than or equal to 3rd Qu.(14.578) will be calssied into MEDIAN, and HIGH if it large than 3rd Qu.(14.578).  
+```{r,echo=FALSE}
+for (i in 1:nrow(grocery)){
+    if (STORE_Mean[grocery$STORE_NUM[i]] <= 9.135){
+    grocery$STORE_LEVEL[i] <- "LOW"
+    }
+    if (STORE_Mean[grocery$STORE_NUM[i]] > 9.135  & STORE_Mean[grocery$STORE_NUM[i]] <= 14.578){
+    grocery$STORE_LEVEL[i] <- "MED"
+    }
+    if (STORE_Mean[grocery$STORE_NUM[i]] > 14.578){
+    grocery$STORE_LEVEL[i] <- "HIGH"
+  }
+}
+
+grocery$STORE_LEVEL <- as.factor(grocery$STORE_LEVEL)
+table(grocery$STORE_LEVEL)
+```
+
+## Model fitting  
+First, fit the model by all the remaining variables.   
+$UNITS = \beta_0 + \beta_1 PRICE + \beta_2 WEEK_END_DATE + \beta_3 UPC + \beta_4 FEATURE + \beta_5 TPR_ONLY + \beta_6 STORE\_LEVEL$  
+```{r,echo=FALSE}
+model1 <- lm(UNITS ~ PRICE + WEEK_END_DATE + UPC + DISPLAY + FEATURE + TPR_ONLY + STORE_LEVEL, data = grocery)
+sum <- summary(model1)
+cat("Insignificant variabkes:", names(which(sum$coeff[,4] > 0.05))[1],"and", names(which(sum$coeff[,4] > 0.05))[2],"\n")
+cat("Residual standard error:", sqrt(deviance(model1)/df.residual(model1)), "& Adjusted R-squared:", sum$adj.r.squared)
+```
+
+The $R^2$ is 0.516 which means 51.6% of the variability in `UNITS` is explained by a linear regression model and the **p-value** shows `TPR_ONLY` is not significant in this model, so it will be removed(Only 1 of 12 of `UPC` is insignificant, so it will not be dropped). In addition, let's construct some diagnostic plots for model and histogram for `UNITS` in order to consider using log transformation.  
+```{r, echo=FALSE, fig.height = 4, fig.width = 8}
+q1 <- ggplot(model1, aes(sample=.resid))+ 
+  stat_qq(color ="#f68060", shape=1)+ 
+  stat_qq_line(color = 'blue')+
+  ggtitle("Normall QQ-plot")+
+  xlab("Quantiles")+
+  ylab("Standardized residuals")+
+  theme(axis.text=element_text(size=9), 
+        axis.title = element_text(size=9),
+        plot.title = element_text(size=12))
+
+q2 <- ggplot(model1, aes(x = .fitted, y = .resid))+
+  geom_point(color ="#f68060", shape=1)+ 
+  geom_smooth(se = FALSE, method = "gam", formula = y ~ s(x, bs = "cs"))+
+  ggtitle("Residuals vs Fitted")+
+  xlab("Fitted values")+
+  ylab("Residuals")+
+  theme(axis.text=element_text(size=9), 
+        axis.title = element_text(size=9),
+        plot.title = element_text(size=12))
+
+q3 <- ggplot(grocery, aes(x = UNITS))+
+  geom_histogram(bins=10, color="black", fill="#f68060")+
+  ggtitle("Histogram for UNITS")+
+  theme(axis.text=element_text(size=9), 
+        axis.title = element_text(size=9),
+        plot.title = element_text(size=12))
+
+q4 <- ggplot(grocery, aes(x = log(UNITS)))+
+  geom_histogram(bins=10, color="black", fill="#f68060")+
+  ggtitle("Histogram for log(UNITS)")+
+  theme(axis.text=element_text(size=9), 
+        axis.title = element_text(size=9),
+        plot.title = element_text(size=12))
+
+grid.arrange(q1, q2, q3, q4, ncol=2)
+```
+
+The normal QQ-plot is heavy tailed, which means the assumption that residuals follow normal distribution may not true. Another assumption that the error terms have a constant variance also can not be hold since the Residuals vs Fitted plot shows that the magnitude of the residuals tends to increase with the fitted values. Besides, The histogram shows clearly that the original distribition of `UNITS` is right skew and can be transformed to symmetry by taking an logarithm. Therefore, the log transformation of response variable `UNITS` would be used in linear regression model.  
+
+```{r, echo=FALSE, fig.height = 2.5, fig.width = 6}
+model2 <- update(model1, log(UNITS) ~ . - TPR_ONLY)
+
+r1 <- ggplot(model2, aes(sample=.resid))+ 
+  stat_qq(color ="#f68060", shape=1)+ 
+  stat_qq_line(color = 'blue')+
+  ggtitle("Normall QQ-plot")+
+  xlab("Quantiles")+
+  ylab("Standardized residuals")+
+  theme(axis.text=element_text(size=9), 
+        axis.title = element_text(size=9),
+        plot.title = element_text(size=12))
+
+r2 <- ggplot(model2, aes(x = .fitted, y = .resid))+
+  geom_point(color ="#f68060", shape=1)+ 
+  geom_smooth(se = FALSE, method = "gam", formula = y ~ s(x, bs = "cs"))+
+  ggtitle("Residuals vs Fitted")+
+  xlab("Fitted values")+
+  ylab("Residuals")+
+  theme(axis.text=element_text(size=9), 
+        axis.title = element_text(size=9),
+        plot.title = element_text(size=12))
+
+cat("Residual standard error:", sqrt(deviance(model2)/df.residual(model2)), "\n")
+grid.arrange(r1, r2, ncol=2)
+```
+
+Now, after response variable has been log transformed, the **RSE** reduced from 9.53 to 0.66, which is a big improvement. In addition, normal QQ-plot looks better, and the residuals appear not to increase with the fitted values, though there is some evidence of a slight non-linear relationship in the data.  
+
+For interaction term, it is natural to think that `PRICE` and `UPC` have an **synergy effect**, since the range of price of each kind of production is not independent. For example, the high-priced products often have a lower sales in general. Therefore, interaction term **PRICE:UPC** could be added into linear regression model.  
+```{r, echo=FALSE}
+model3 <- update(model2, . ~ . + PRICE:UPC)
+anova(model2,model3,test="F")
+coef <- as.data.frame(coef(model3))
+```
+The model comparison table shows adding interaction term to model(model3) did lead to a significantly improved fit over model2. Hence, 
+$UNITS = \beta_0 + \beta_1 PRICE + \beta_2WEEK\_END\_DATE + \beta_3 UPC + \beta_4 DISPLAY + \beta_5 FEATURE + \beta_6 STORE\_LEVEL + \beta_7 PRICE:UPC$  
+is our final linear regression model. One of the most important benefits of linear regression is easy to interpret. For example, after considering the model coefficient, if we increase 10 units of price of product UPC1111087396 and keep other variables constant, the UNIST would decrease by (`r coef(model3)[2]` + `r coef(model3)[19]`) * 10 = `r (coef(model3)[2] + coef(model3)[19]) * 10`.
+
+
+# 4. Random Forest Model
+Now, performing a Random Forest model to predict `UNITS` with all variables as the multicollinearity does not have much impact on the random forest accuracy. The only data processing of this model is to reduce the level of STORE_NUM, since the function randomForest can not handle 77 categorical predictors. So, it will be replaced by `STORE_LEVEL` as before.  
+  
+First, use 5-fold cross validation to find optimal *mtry*(number of variables randomly sampled as candidates at each splot) among 2,3,4 and 5.  
+```{r, echo=FALSE}
+grocery<-grocery[sample(nrow(grocery)),] # Randomly shuffle the data
+folds <- cut(seq(1,nrow(grocery)),breaks=5,labels=FALSE) # Create 5 equally size folds
+
+#cross validation
+mbs = rep(0, 2)
+mbs_grid = matrix(rep(0, 20), ncol=5)
+mtry <- c(2,3,4,5)
+k = 1
+for (r in mtry){
+  for(i in 1:5){
+    train_points <- which(folds!=i,arr.ind=TRUE)
+    # define the model
+    model_rf <- randomForest(UNITS ~ BASE_PRICE + PRICE + WEEK_END_DATE + UPC + MANUFACTURER + DISPLAY + FEATURE + TPR_ONLY + STORE_LEVEL, data = grocery, subset = train_points, mtry=r, ntree= 30)
+    model_rf_pred <- predict(model_rf, newdata = grocery[-train_points,])
+    # compute mean absolute error
+    mbs_grid[k,i] <- mean(abs(model_rf_pred - grocery$UNITS[-train_points]))
+    
+}
+  mbs[k] <- mean(mbs_grid[k,])
+  k <- k+1
+}
+
+# perform the table
+t <- as.table(mbs)
+rownames(t) <- mtry
+```
+```{r,echo=FALSE}
+cat("The mean absolute error for each mtry: \n\n")
+print(t)
+```
+The tables shows the mean absolute error of each mtry computed by cross validation. When *mtry=3*, this model return the lowest mean absolute error. Therefore, "3" can be treated as optimal value of mytr in this model.  
+  
+Now, to interpret the model, a variable importance table based on prediction accuracy could be constructed.  
+  
+```{r, echo=FALSE}
+model_rf <- randomForest(UNITS ~ BASE_PRICE + PRICE + WEEK_END_DATE + UPC + MANUFACTURER + DISPLAY + FEATURE + TPR_ONLY + STORE_LEVEL, data = grocery, subset = train_points, mtry=3, ntree=250, importance = TRUE)
+imp <- importance(model_rf, type = 1)
+cat("Table of Mean Decrease in Accuracy:\n\n")
+as.table(imp[order(-imp),1])
+```
+
+This table suggests `STORE_LEVEL` and `DISPLAY` are two most important variables, meaning that removing these two variables has a much higher influence than other variables. Interestingly, the three variables(`BASE_PRICE`, `MANUFACTURER` and `TPR_ONLY`) dropped from the linear regression model also have the lowest important of this random forest model.  
+
+# 5. Model Comparing
+Use 10-fold cross validation to compute the cross-validated Root Mean Square Error for linear regression and random forest model, and construct a table to display the result. As we all know, the response variable `UNITS` is integer, however, I think the prediction is not really interested in an exact integer of sales, but sales expressed in fractions can reflect more information rather than integers by rounding, for example, 7.81 is not less useful than '7' or '8' -- in fact, it's probably more useful. Therefore, the output of prediction will not be rounded.  
+```{r, echo=FALSE}
+grocery<-grocery[sample(nrow(grocery)),] #shuffle the data
+folds <- cut(seq(1,nrow(grocery)),breaks=10,labels=FALSE) #Create 10 equally size folds
+
+#Cross validation
+RMSE <- matrix(rep(0,20), ncol=10)
+for(i in 1:10){
+    train_points <- which(folds!=i,arr.ind=TRUE)
+    #Define two models
+    model_lm_cv <- lm(log(UNITS) ~ PRICE + WEEK_END_DATE + UPC + DISPLAY + FEATURE + STORE_LEVEL + PRICE:UPC, data = grocery[train_points,])
+    model_rf_cv <- randomForest(UNITS ~ BASE_PRICE + PRICE + WEEK_END_DATE + UPC + MANUFACTURER + DISPLAY + FEATURE + TPR_ONLY + STORE_LEVEL, data = grocery, subset = train_points, mtry=3, ntree = 250)
+
+    #Prediction
+    model_lm_pred <- exp(predict(model_lm_cv, newdata = grocery[-train_points,]))
+    model_rf_pred <- predict(model_rf_cv, newdata = grocery[-train_points,])
+    #Compute RMSE
+    RMSE[1,i] <- sqrt(mean((model_lm_pred - grocery$UNITS[-train_points])^2))
+    RMSE[2,i] <- sqrt(mean((model_rf_pred - grocery$UNITS[-train_points])^2))
+    
+}
+
+#Perform a table
+table <- as.table(format(RMSE, digits = 3))
+rownames(table) <- c("Linear Regression","Random Forest")
+colnames(table) <- 1:10
+print(table)
+```
+
+As the sample contains 10 pairs RMSE is computed by 10-ford cross validation, each pair of RMSE is constructed in random and has no correlation with each other. Therefore, a paired t-test can be performed. Besides, the table above suggests a overall performance that Random Forest has a lower value of RMSE, so a one-side test is constructed.  
+null hypothesis $H_0$: the mean value of RMSE from these two model are equal.  
+alternative hypothesis $H_1$: the mean value of RMSE from Linear Regression model is greater than the value of RMSE from random forest model.
+
+```{r, echo=FALSE}
+test <- t.test(RMSE[1,], RMSE[2,], paired = TRUE, alternative = "greater")
+test
+```
+
+The result shows **t = `r test$statistic`**, and **p-value = `r test$p.value` < 0.001**, therefore, there is a very strong evidence to reject H_0 at 0.1% level. In conclusion, in terms of predictive power, the random forest model is significantly better than the linear regression model. However, in addition to performance of prediction, some other advantages of each model were provided below:  
+**Advantages of Linear Regression**:  
+- Easy to interpret. It's convenient to find the impact of each explanatory variables among response variable, while it is very difficult in random forest.   
+
+**Advantages of Random Forest**:  
+- Multicollinearity does not have much impact in random forest, but in linear regression, multicollinearity among each of variables can not be ignored, especially when the number of variables is large, the multicollinearity is difficult to deal with.  
+- Importance of each variable can be estimated.  
+- As the random forest is non-parameter model, the bias can be very low. Meanwhile, the variable can be randomly sampled as candidates at each split lead to variance decreasing, thereby limiting overfitting.  
+In summary, the overall goal of the task is to build a model to predit `UNITS` given the available covariates, so the accuracy of prediction may play a more important role than model interpretability. Hence, I would choose *Random Forest Model* as the "best" model.
+
+To estimate the average effect of a given product's `UNITS` with decreasing PRICE by 10%, the random forest model who has been selected as "best" model above will be used. First, We find the specific data in dataframe , and estimate `UNITS` for two different `PRICE`.
+```{r, echo=FALSE}
+data <- grocery[which(grocery$UPC==7192100337 & grocery$WEEK_END_DATE == 39995 & grocery$STORE_NUM == 8263),] # find the given data
+data_red <- data
+data_red$PRICE <- data$PRICE * 0.9 # decreasing price by 10%
+
+pre <- predict(model_rf, newdata = data)
+pre_red <- predict(model_rf, newdata = data_red)
+cat("the UNITS would increase:", ((pre_red-pre)/pre)*100,"%\n")
+```
+The result shows that the `UNITS` would increase `r (pre_red-pre)/pre*100`% after decreasing price by 10% 
